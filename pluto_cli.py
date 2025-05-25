@@ -6,7 +6,7 @@ import click # Added for click.edit()
 import subprocess
 import json
 
-from models.save_file import HadesSaveFile
+from models.raw_save_file import RawSaveFile # Changed import
 from models.lua_state import LuaState, lua_state_to_json_string, json_string_to_lua_state_data
 from core_logic import (
     load_save_file,
@@ -33,7 +33,7 @@ def handle_edit_raw(args):
     try:
         try:
             print(f"Loading save file: '{save_file_path}'...")
-            save_file = HadesSaveFile.from_file(save_file_path)
+            raw_save_file = RawSaveFile.from_file(save_file_path) # Changed to RawSaveFile
             print("Save file loaded successfully.")
         except FileNotFoundError:
             print(f"Error: Save file not found at '{save_file_path}'. Please verify the path and try again.", file=sys.stderr)
@@ -43,14 +43,32 @@ def handle_edit_raw(args):
             return 
         except Exception as e: 
             print(f"Error: An unexpected error occurred while loading the save file '{save_file_path}': {e}", file=sys.stderr)
-            return 
+            return
 
         try:
-            print("Converting Lua state to JSON format...")
-            json_string = lua_state_to_json_string(save_file.lua_state)
-            print("Lua state successfully converted to JSON.")
-        except Exception as e: 
-            print(f"Error: Failed to convert Lua state to JSON. Details: {e}", file=sys.stderr)
+            print("Preparing save data for JSON conversion...")
+            # Make a copy to avoid modifying the original raw_save_file.save_data prematurely
+            data_to_edit = raw_save_file.save_data.copy()
+            
+            # Convert lua_state bytes to JSON-serializable dict/list structure
+            if 'lua_state' in data_to_edit:
+                current_lua_state_value = data_to_edit['lua_state']
+                # Ensure current_lua_state_value is bytes before processing
+                # Construct's PrefixedArray(..., Byte) parses into a ListContainer (list of ints)
+                if isinstance(current_lua_state_value, list): 
+                    current_lua_state_value = bytes(current_lua_state_value)
+                
+                if isinstance(current_lua_state_value, bytes):
+                    lua_state_obj = LuaState.from_bytes(raw_save_file.version, current_lua_state_value)
+                    data_to_edit['lua_state'] = lua_state_obj.to_dicts() # This returns List[Dict[Any, Any]]
+                else:
+                    # This case should ideally not be reached if logic is correct
+                    print(f"Warning: 'lua_state' in save_data was not in expected bytes or list format, but type {type(current_lua_state_value)}. Skipping its conversion for JSON editing.", file=sys.stderr)
+            
+            json_string = json.dumps(data_to_edit, indent=2)
+            print("Save data successfully converted to JSON.")
+        except Exception as e:
+            print(f"Error: Failed to convert save data to JSON. Details: {e}", file=sys.stderr)
             return
 
 
@@ -143,8 +161,8 @@ def handle_edit_raw(args):
             return
 
         try:
-            print("Validating and converting JSON data back to Lua state structure...")
-            new_lua_data = json_string_to_lua_state_data(modified_json_string)
+            print("Parsing modified JSON data...")
+            modified_data_dict = json.loads(modified_json_string)
             print("JSON data successfully parsed.")
         except json.JSONDecodeError as e:
             print(f"Error: The modified data is not valid JSON. Please correct the syntax. Details: {e}", file=sys.stderr)
@@ -154,33 +172,49 @@ def handle_edit_raw(args):
             # The finally block needs to be aware of this decision if we want to persist it.
             # For now, the finally block will still remove it. This needs refinement if data persistence is key.
             # A flag could be set: e.g., `keep_temp_file_on_error = True`
-            return 
-            
+            return
+
         try:
-            print("Updating internal Lua state with the modified data...")
-            save_file.lua_state = LuaState.from_dict(save_file.version, new_lua_data)
-            print("Internal Lua state updated.")
-        except (TypeError, KeyError, IndexError, ValueError) as e: 
-            print(f"Error: The JSON data is valid, but its structure or types are not compatible with the expected Lua state format. Details: {e}", file=sys.stderr)
+            print("Updating internal save data structure with modified data...")
+            # Convert the 'lua_state' part from List[Dict] back to bytes
+            if 'lua_state' in modified_data_dict and isinstance(modified_data_dict['lua_state'], list):
+                # Assuming the version from the initially loaded raw_save_file is still correct
+                # and that the user hasn't maliciously changed the version in a way that affects lua_state structure incompatibly
+                # without also changing the top-level 'version' field if that's part of modified_data_dict.
+                # If 'version' is part of modified_data_dict, use that, otherwise use raw_save_file.version.
+                version_for_lua_state = modified_data_dict.get('version', raw_save_file.version)
+                
+                # Ensure all keys in lua_state dicts are strings if necessary, or handle potential non-string keys.
+                # The `LuaState.from_dict` expects List[Dict[Any, Any]], so direct use should be fine.
+                lua_state_obj = LuaState.from_dict(version_for_lua_state, modified_data_dict['lua_state'])
+                modified_data_dict['lua_state'] = lua_state_obj.to_bytes()
+
+            raw_save_file.save_data = modified_data_dict
+            print("Internal save data updated.")
+        except (TypeError, KeyError, IndexError, ValueError) as e:
+            print(f"Error: The JSON data is valid, but its structure or types are not compatible with the expected save data format. Details: {e}", file=sys.stderr)
             print(f"Your modified JSON data was left in the temporary file: {temp_file_name}", file=sys.stderr)
             return
-        except Exception as e: 
-            print(f"Error: An unexpected error occurred while applying the JSON data to the Lua state. Details: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error: An unexpected error occurred while updating the internal save data. Details: {e}", file=sys.stderr)
             return
 
         try:
-            print(f"Attempting to save all changes back to the original save file: '{save_file_path}'...")
-            save_file.to_file(save_file_path)
-            print(f"Successfully saved changes to '{save_file_path}'. Your original file has been overwritten.")
+            output_path = args.output if args.output else save_file_path
+            print(f"Attempting to save all changes to: '{output_path}'...")
+            raw_save_file.to_file(output_path) # Use RawSaveFile.to_file
+            print(f"Successfully saved changes to '{output_path}'.")
+            if output_path != save_file_path:
+                print(f"Original file '{save_file_path}' remains unchanged.")
         except (IOError, OSError) as e:
-            print(f"Error: Could not write changes back to the save file '{save_file_path}'. Your original file was NOT modified. Details: {e}", file=sys.stderr)
+            print(f"Error: Could not write changes back to the save file '{output_path}'. Details: {e}", file=sys.stderr)
             return
         except Exception as e:
-            print(f"Error: An unexpected error occurred while saving the final changes to '{save_file_path}'. Your original file was NOT modified. Details: {e}", file=sys.stderr)
+            print(f"Error: An unexpected error occurred while saving the final changes to '{output_path}'. Details: {e}", file=sys.stderr)
             return
 
-    except Exception as e: 
-        print(f"An critical unexpected error occurred during the 'edit_raw' process: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"A critical unexpected error occurred during the 'edit_raw' process: {e}", file=sys.stderr)
         print("Please report this error if it seems like a bug in the tool.", file=sys.stderr)
     finally:
         # Consider a flag here if we decide to keep temp_file_name on json.JSONDecodeError
