@@ -1,6 +1,7 @@
 import argparse
 import sys
 import os # For checking file existence in export_runs
+import json
 from core_logic import (
     load_save_file,
     save_game_file,
@@ -33,6 +34,41 @@ def handle_show(args):
             print("Currencies:")
             for currency, value in currencies.items():
                 print(f"  {currency.replace('_', ' ').title()}: {int(value)}")
+                
+        elif args.section == "get_raw":
+            print("Extracting raw save file contents...")
+
+            raw = getattr(save_file, "raw_save_file", None)
+            if raw is not None:
+                try:
+                    # Extract instance attributes
+                    raw_dict = vars(raw)
+                except TypeError:
+                    # Fallback if vars() fails
+                    raw_dict = {
+                        attr: getattr(raw, attr)
+                        for attr in dir(raw)
+                        if not attr.startswith('_') and not callable(getattr(raw, attr))
+                    }
+
+                # Attempt to convert all values to serializable types
+                serializable_raw = {}
+                for key, value in raw_dict.items():
+                    try:
+                        json.dumps(value)  # Test if it's serializable
+                        serializable_raw[key] = value
+                    except TypeError:
+                        serializable_raw[key] = str(value)  # Fallback to string
+
+                # Write to file
+                output_path = os.path.join(os.getcwd(), "raw_save_file_output.json")
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(serializable_raw, f, indent=2, ensure_ascii=False)
+
+                print(f"Raw data saved to: {output_path}")
+            else:
+                print("  No raw data available.")
+
     except FileNotFoundError:
         print(f"Error: Save file not found at {args.file}", file=sys.stderr)
         sys.exit(1)
@@ -117,12 +153,14 @@ def main():
     show_parser = subparsers.add_parser("show", help="Display save file data")
     show_parser.add_argument(
         "section",
-        choices=["info", "currencies"],
+        choices=["info", "currencies", "get_raw"],
         help=("Which section of data to display:\n"
               "  info       - File version, run count, current location, etc.\n"
-              "  currencies - Darkness, Gems, Diamonds, etc.")
+              "  currencies - Darkness, Gems, Diamonds, etc.\n"
+              "  get_raw    - Raw unparsed save file data (for debugging)")
     )
     show_parser.set_defaults(func=handle_show)
+
 
     # Update command
     update_parser = subparsers.add_parser("update", help="Modify a field in the save file and save changes")
@@ -131,7 +169,7 @@ def main():
         choices=[
             "darkness", "gems", "diamonds", "nectar",
             "ambrosia", "keys", "titan_blood",
-            "god_mode_reduction", "hell_mode"
+            "god_mode_reduction", "hell_mode", "money"
         ],
         help=("Field to modify (e.g., darkness, gems, god_mode_reduction, hell_mode).\n"
               "For god_mode_reduction, provide percentage (20-80).\n"

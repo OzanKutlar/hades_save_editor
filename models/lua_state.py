@@ -67,6 +67,7 @@ class LuaState:
     titan_blood = _LuaStateProperty("GameState.Resources.SuperLockKeys", 0.0)
     hell_mode = _LuaStateProperty("GameState.Flags.HardMode", False)
     easy_mode_level = _LuaStateProperty("GameState.EasyModeLevel", 0.0)
+    money = _LuaStateProperty("CurrentRun.Money", 0.0)
 
     gift_record = _LuaStateProperty("CurrentRun.GiftRecord", {})
     npc_interactions = _LuaStateProperty("CurrentRun.NPCInteractions", {})

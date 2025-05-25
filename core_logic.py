@@ -55,6 +55,7 @@ def get_currencies(save_file_object: HadesSaveFile) -> dict:
         "nectar": ls.nectar,
         "ambrosia": ls.ambrosia,
         "chthonic_key": ls.chthonic_key,
+        "money": ls.money,
         "titan_blood": ls.titan_blood,
     }
 
@@ -69,6 +70,8 @@ def update_field(save_file_object: HadesSaveFile, field_name: str, field_value: 
         ls.darkness = float(field_value)
     elif field_name == "gems":
         ls.gems = float(field_value)
+    elif field_name == "money":
+        ls.money = float(field_value)
     elif field_name == "diamonds":
         ls.diamonds = float(field_value)
     elif field_name == "nectar":
