@@ -47,25 +47,45 @@ def handle_edit_raw(args):
 
         try:
             print("Preparing save data for JSON conversion...")
-            # Make a copy to avoid modifying the original raw_save_file.save_data prematurely
-            data_to_edit = raw_save_file.save_data.copy()
+            # raw_save_file.save_data is a construct.Container
+            # Create a dictionary for JSON editing
+            editable_save_data_dict = {}
             
-            # Convert lua_state bytes to JSON-serializable dict/list structure
-            if 'lua_state' in data_to_edit:
-                current_lua_state_value = data_to_edit['lua_state']
-                # Ensure current_lua_state_value is bytes before processing
-                # Construct's PrefixedArray(..., Byte) parses into a ListContainer (list of ints)
-                if isinstance(current_lua_state_value, list): 
-                    current_lua_state_value = bytes(current_lua_state_value)
-                
-                if isinstance(current_lua_state_value, bytes):
-                    lua_state_obj = LuaState.from_bytes(raw_save_file.version, current_lua_state_value)
-                    data_to_edit['lua_state'] = lua_state_obj.to_dicts() # This returns List[Dict[Any, Any]]
+            # Define expected fields based on common schema structure (e.g., sav16)
+            # This list should be comprehensive for all supported versions or handled dynamically.
+            # For now, using a list similar to what was in RawSaveFile previously.
+            fields_to_copy = [
+                "version", "location", "runs", "active_meta_points",
+                "active_shrine_points", "god_mode_enabled", "hell_mode_enabled",
+                "lua_keys", "current_map_name", "start_next_map" 
+                # "lua_state" is handled separately
+                # "timestamp" is version-specific (only in v16's save_data container)
+            ]
+            if raw_save_file.version == 16 and hasattr(raw_save_file.save_data, "timestamp"):
+                fields_to_copy.insert(1, "timestamp")
+
+            for field_name in fields_to_copy:
+                if hasattr(raw_save_file.save_data, field_name):
+                    editable_save_data_dict[field_name] = getattr(raw_save_file.save_data, field_name)
                 else:
-                    # This case should ideally not be reached if logic is correct
-                    print(f"Warning: 'lua_state' in save_data was not in expected bytes or list format, but type {type(current_lua_state_value)}. Skipping its conversion for JSON editing.", file=sys.stderr)
+                    # Handle cases where a field might not exist (e.g. older versions)
+                    # For simplicity, we assume fields exist if listed, or use None/default.
+                    editable_save_data_dict[field_name] = None 
+                    print(f"Warning: Field '{field_name}' not found in save_data Container for version {raw_save_file.version}. Setting to None in JSON.", file=sys.stderr)
+
+            # Handle lua_state: convert from bytes/ListContainer to list of dicts
+            lua_state_from_container = raw_save_file.save_data.lua_state
+            if isinstance(lua_state_from_container, list): # If it's ListContainer
+                lua_state_from_container = bytes(lua_state_from_container)
             
-            json_string = json.dumps(data_to_edit, indent=2)
+            if isinstance(lua_state_from_container, bytes):
+                lua_state_obj = LuaState.from_bytes(raw_save_file.version, lua_state_from_container)
+                editable_save_data_dict['lua_state'] = lua_state_obj.to_dicts()
+            else:
+                print(f"Warning: 'lua_state' in save_data Container was not bytes or list, but type {type(lua_state_from_container)}. Setting to None in JSON.", file=sys.stderr)
+                editable_save_data_dict['lua_state'] = None
+            
+            json_string = json.dumps(editable_save_data_dict, indent=2)
             print("Save data successfully converted to JSON.")
         except Exception as e:
             print(f"Error: Failed to convert save data to JSON. Details: {e}", file=sys.stderr)
@@ -176,21 +196,31 @@ def handle_edit_raw(args):
 
         try:
             print("Updating internal save data structure with modified data...")
-            # Convert the 'lua_state' part from List[Dict] back to bytes
+            # Update the fields of the original raw_save_file.save_data Container
+            final_lua_bytes = None
             if 'lua_state' in modified_data_dict and isinstance(modified_data_dict['lua_state'], list):
-                # Assuming the version from the initially loaded raw_save_file is still correct
-                # and that the user hasn't maliciously changed the version in a way that affects lua_state structure incompatibly
-                # without also changing the top-level 'version' field if that's part of modified_data_dict.
-                # If 'version' is part of modified_data_dict, use that, otherwise use raw_save_file.version.
                 version_for_lua_state = modified_data_dict.get('version', raw_save_file.version)
-                
-                # Ensure all keys in lua_state dicts are strings if necessary, or handle potential non-string keys.
-                # The `LuaState.from_dict` expects List[Dict[Any, Any]], so direct use should be fine.
                 lua_state_obj = LuaState.from_dict(version_for_lua_state, modified_data_dict['lua_state'])
-                modified_data_dict['lua_state'] = lua_state_obj.to_bytes()
+                final_lua_bytes = lua_state_obj.to_bytes()
 
-            raw_save_file.save_data = modified_data_dict
-            print("Internal save data updated.")
+            for key, value in modified_data_dict.items():
+                if key == 'lua_state':
+                    if final_lua_bytes is not None:
+                        setattr(raw_save_file.save_data, key, final_lua_bytes)
+                elif hasattr(raw_save_file.save_data, key):
+                    setattr(raw_save_file.save_data, key, value)
+                # else: field in JSON not in original save_data container, might be an error or new field.
+                # For now, only update existing fields.
+            
+            # Critically, update raw_save_file.lua_state_bytes as well
+            if final_lua_bytes is not None:
+                 raw_save_file.lua_state_bytes = final_lua_bytes
+            
+            # Note: raw_save_file.save_data (the Container) has been updated directly.
+            # The assignment `raw_save_file.save_data = modified_data_dict` is no longer needed
+            # as we are modifying the container in place.
+
+            print("Internal save data (Container) updated.")
         except (TypeError, KeyError, IndexError, ValueError) as e:
             print(f"Error: The JSON data is valid, but its structure or types are not compatible with the expected save data format. Details: {e}", file=sys.stderr)
             print(f"Your modified JSON data was left in the temporary file: {temp_file_name}", file=sys.stderr)
