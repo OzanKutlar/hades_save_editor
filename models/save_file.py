@@ -47,12 +47,6 @@ class HadesSaveFile:
 
         # Unused, for debugging
         lua_state.raw_save_file = raw_save_file
-        # import os
-        # import json
-
-        # output_path = os.path.join(os.getcwd(), "raw_lua_state.json")
-        # with open(output_path, "w", encoding="utf-8") as f:
-            # json.dump(lua_state.to_dicts(), f, indent=2, ensure_ascii=False)
 
         return HadesSaveFile(
             version=raw_save_file.version,

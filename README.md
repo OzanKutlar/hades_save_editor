@@ -100,6 +100,21 @@ python pluto_cli.py --file <your_save.sav> export_runs user_runs.csv
 ```
 This will create `user_runs.csv` in the current directory with your run data.
 
+**7. Edit Raw Lua State (Advanced):**
+Allows direct editing of the game's Lua state by exporting it to a temporary JSON file. Your default text editor will be opened to modify this JSON. Once you save and close the editor, the changes will be imported back into the save file.
+
+Example:
+```bash
+python pluto_cli.py --file <your_save.sav> edit_raw
+```
+
+Example with output to a new file:
+```bash
+python pluto_cli.py --file <your_save.sav> edit_raw --output <new_save.sav>
+```
+
+**Warning:** This is an advanced feature. Incorrectly editing the JSON structure can easily corrupt your save file. Use with caution and ensure you understand the data structure you are modifying.
+
 ## Disclaimer
 
 Modifying game save files can potentially lead to corrupted saves or unexpected behavior in your game. Always back up your original save files before making any changes. Use this tool at your own risk.

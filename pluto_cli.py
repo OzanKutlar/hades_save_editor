@@ -1,10 +1,13 @@
 import argparse
 import sys
 import os # For checking file existence in export_runs
-import json
+import tempfile
+import click # Added for click.edit()
 from core_logic import (
     load_save_file,
     save_game_file,
+    convert_lua_state_to_json,
+    update_lua_state_from_json,
     get_save_info,
     get_currencies,
     update_field,
@@ -12,6 +15,52 @@ from core_logic import (
     export_runs_to_csv,
     _damage_reduction_from_easy_mode_level # For displaying god mode reduction
 )
+
+def handle_edit_raw(args):
+    try:
+        save_file = load_save_file(args.file)
+        
+        # Convert Lua state to JSON
+        try:
+            json_string = convert_lua_state_to_json(save_file)
+        except Exception as e:
+            print(f"Error converting Lua state to JSON: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # Create a temporary file to store JSON
+        temp_file_descriptor, temp_file_path = tempfile.mkstemp(suffix=".json", text=True)
+        
+        try:
+            with os.fdopen(temp_file_descriptor, 'w', encoding='utf-8') as tmp:
+                tmp.write(json_string)
+            
+            # Open the file in the default editor using click.edit()
+            click.edit(filename=temp_file_path)
+
+            # Read the modified JSON from the temporary file
+            with open(temp_file_path, 'r', encoding='utf-8') as tmp:
+                modified_json_string = tmp.read()
+            
+            # Update Lua state from the modified JSON
+            update_lua_state_from_json(save_file, modified_json_string)
+            
+            output_path = args.output if args.output else args.file
+            save_game_file(save_file, output_path)
+            print(f"Successfully updated Lua state from raw edit. Saved to {output_path}")
+
+        finally:
+            # Clean up the temporary file
+            os.remove(temp_file_path)
+
+    except FileNotFoundError:
+        print(f"Error: Save file not found at {args.file}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as ve:
+        print(f"Error processing JSON or save file: {ve}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        sys.exit(1)
 
 def handle_show(args):
     try:
@@ -34,41 +83,6 @@ def handle_show(args):
             print("Currencies:")
             for currency, value in currencies.items():
                 print(f"  {currency.replace('_', ' ').title()}: {int(value)}")
-                
-        elif args.section == "get_raw":
-            print("Extracting raw save file contents...")
-
-            raw = getattr(save_file, "raw_save_file", None)
-            if raw is not None:
-                try:
-                    # Extract instance attributes
-                    raw_dict = vars(raw)
-                except TypeError:
-                    # Fallback if vars() fails
-                    raw_dict = {
-                        attr: getattr(raw, attr)
-                        for attr in dir(raw)
-                        if not attr.startswith('_') and not callable(getattr(raw, attr))
-                    }
-
-                # Attempt to convert all values to serializable types
-                serializable_raw = {}
-                for key, value in raw_dict.items():
-                    try:
-                        json.dumps(value)  # Test if it's serializable
-                        serializable_raw[key] = value
-                    except TypeError:
-                        serializable_raw[key] = str(value)  # Fallback to string
-
-                # Write to file
-                output_path = os.path.join(os.getcwd(), "raw_save_file_output.json")
-                with open(output_path, "w", encoding="utf-8") as f:
-                    json.dump(serializable_raw, f, indent=2, ensure_ascii=False)
-
-                print(f"Raw data saved to: {output_path}")
-            else:
-                print("  No raw data available.")
-
     except FileNotFoundError:
         print(f"Error: Save file not found at {args.file}", file=sys.stderr)
         sys.exit(1)
@@ -153,14 +167,12 @@ def main():
     show_parser = subparsers.add_parser("show", help="Display save file data")
     show_parser.add_argument(
         "section",
-        choices=["info", "currencies", "get_raw"],
+        choices=["info", "currencies"],
         help=("Which section of data to display:\n"
               "  info       - File version, run count, current location, etc.\n"
-              "  currencies - Darkness, Gems, Diamonds, etc.\n"
-              "  get_raw    - Raw unparsed save file data (for debugging)")
+              "  currencies - Darkness, Gems, Diamonds, etc.")
     )
     show_parser.set_defaults(func=handle_show)
-
 
     # Update command
     update_parser = subparsers.add_parser("update", help="Modify a field in the save file and save changes")
@@ -169,7 +181,7 @@ def main():
         choices=[
             "darkness", "gems", "diamonds", "nectar",
             "ambrosia", "keys", "titan_blood",
-            "god_mode_reduction", "hell_mode", "money"
+            "god_mode_reduction", "hell_mode"
         ],
         help=("Field to modify (e.g., darkness, gems, god_mode_reduction, hell_mode).\n"
               "For god_mode_reduction, provide percentage (20-80).\n"
@@ -195,22 +207,19 @@ def main():
     export_parser.add_argument("csv_filepath", help="Path to save the CSV file (e.g., runs.csv)")
     export_parser.set_defaults(func=handle_export_runs)
 
+    # Edit raw Lua state command
+    edit_raw_parser = subparsers.add_parser("edit_raw", help="Edit the raw Lua state via a temporary JSON file")
+    edit_raw_parser.add_argument(
+        "-o", "--output",
+        help="Optional: Path to save to a new file (otherwise overwrites original)"
+    )
+    edit_raw_parser.set_defaults(func=handle_edit_raw)
+
     if len(sys.argv) <= 1: # Should be 1 if only script name, or 2 if only --file without command
         parser.print_help(sys.stderr)
         sys.exit(1)
     
-    # Check if --file is provided before parsing to give a more specific error
-    # Note: argparse 'required=True' handles this, but this is an example if needed for complex cases
-    # if '--file' not in sys.argv and '-f' not in sys.argv:
-    #    print("Error: --file argument is required.", file=sys.stderr)
-    #    parser.print_help(sys.stderr)
-    #    sys.exit(1)
-        
     args = parser.parse_args()
-    
-    # Ensure that if a command is 'update', 'field' and 'value' are present.
-    # Argparse handles this due to them not being optional.
-    
     args.func(args)
 
 if __name__ == "__main__":
