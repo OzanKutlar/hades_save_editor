@@ -8,6 +8,7 @@ import json
 
 from models.raw_save_file import RawSaveFile # Changed import
 from models.lua_state import LuaState, lua_state_to_json_string, json_string_to_lua_state_data
+from lua_editor import LuaStateEditor # Added import
 from core_logic import (
     load_save_file,
     save_game_file,
@@ -255,6 +256,54 @@ def handle_edit_raw(args):
             except OSError as e:
                 print(f"Error: Could not remove the temporary file '{temp_file_name}'. You may need to remove it manually. Details: {e}", file=sys.stderr)
 
+def handle_edit_lua(args):
+    try:
+        print(f"Loading save file: '{args.file}'...")
+        # Note: load_save_file from core_logic returns a HadesSaveFile instance
+        hades_save = load_save_file(args.file) 
+        print("Save file loaded.")
+
+        if not hades_save.lua_state:
+            print("Error: Lua state is not present in the save file.", file=sys.stderr)
+            return
+
+        # LuaState.to_dicts() returns a list of tables (usually one for Hades).
+        lua_state_dicts_list = hades_save.lua_state.to_dicts()
+        if not lua_state_dicts_list: # Check if the list is empty
+            print("Error: Lua state is empty or malformed (to_dicts() returned empty list).", file=sys.stderr)
+            return
+        
+        # The main Lua state is the first dictionary in the list
+        editable_lua_dict = lua_state_dicts_list[0] 
+
+        print("Launching Lua state editor...")
+        editor = LuaStateEditor(editable_lua_dict)
+        modified_lua_dict_result = editor.run() # This blocks until editor exits
+
+        if editor.user_saved and modified_lua_dict_result is not None:
+            print("Applying changes to Lua state...")
+            # LuaState.from_dict expects a list of dicts, so wrap modified_lua_dict_result
+            new_lua_state = LuaState.from_dict(hades_save.version, [modified_lua_dict_result])
+            
+            hades_save.lua_state = new_lua_state
+            
+            output_path = args.output if args.output else args.file
+            
+            print(f"Saving changes to '{output_path}'...")
+            save_game_file(hades_save, output_path) # from core_logic
+            print("Successfully saved changes.")
+        else:
+            print("Lua state editing cancelled. No changes were saved.")
+
+    except FileNotFoundError:
+        print(f"Error: Save file not found at '{args.file}'.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred during 'edit_lua': {e}", file=sys.stderr)
+        # import traceback # Uncomment for debugging if needed
+        # traceback.print_exc() # Uncomment for debugging if needed
+        sys.exit(1)
+
 def handle_show(args):
     try:
         save_file = load_save_file(args.file)
@@ -401,12 +450,28 @@ def main():
     export_parser.set_defaults(func=handle_export_runs)
 
     # Edit raw Lua state command
-    edit_raw_parser = subparsers.add_parser("edit_raw", help="Edit the raw Lua state via a temporary JSON file")
+    edit_raw_parser = subparsers.add_parser(
+        "edit_raw", 
+        help="Edit the entire save file (including Lua state) via a temporary JSON file. "
+             "WARNING: This method can corrupt data if not used carefully. "
+             "Prefer 'edit_lua' for safer Lua state editing."
+    )
     edit_raw_parser.add_argument(
         "-o", "--output",
         help="Optional: Path to save to a new file (otherwise overwrites original)"
     )
     edit_raw_parser.set_defaults(func=handle_edit_raw)
+
+    # Edit Lua state command (new TUI editor)
+    edit_lua_parser = subparsers.add_parser(
+        "edit_lua",
+        help="Interactively edit the Lua state within the save file using a TUI."
+    )
+    edit_lua_parser.add_argument(
+        "-o", "--output",
+        help="Optional: Path to save to a new file (otherwise overwrites original)."
+    )
+    edit_lua_parser.set_defaults(func=handle_edit_lua)
 
     if len(sys.argv) <= 1: # Should be 1 if only script name, or 2 if only --file without command
         parser.print_help(sys.stderr)
