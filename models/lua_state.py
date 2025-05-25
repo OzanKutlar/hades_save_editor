@@ -76,6 +76,7 @@ class LuaState:
     activation_record = _LuaStateProperty("CurrentRun.ActivationRecord", {})
     use_record = _LuaStateProperty("CurrentRun.UseRecord", {})
     text_lines = _LuaStateProperty("CurrentRun.TextLinesRecord", {})
+    loot_choice = _LuaStateProperty("CurrentRun.LootChoiceHistory", {})
 
     def _parse_nested_path_reference(
             self,
