@@ -1,6 +1,7 @@
 import csv
 from models.save_file import HadesSaveFile
 import gamedata # Used by export_runs_to_csv and potentially others
+from IPython import embed
 
 # Helper functions (moved from main.py)
 def _easy_mode_level_from_damage_reduction(damage_reduction: int) -> int:
@@ -58,6 +59,98 @@ def get_currencies(save_file_object: HadesSaveFile) -> dict:
         "money": ls.money,
         "titan_blood": ls.titan_blood,
     }
+    
+
+def get_loot_choices(save_file_object: HadesSaveFile) -> dict:
+    print("Core logic: Getting Boons")
+    loot_choices = save_file_object.loot_choice
+    choice_counts = {}
+
+    for key, upgrade in loot_choices.items():
+        for _, choice in upgrade.get("UpgradeChoices", {}).items():
+            if choice.get("Chosen", "false") == "true":
+                name = choice.get("Name")
+                if name:
+                    choice_counts[name] = choice_counts.get(name, 0) + 1
+
+    # Format result like: "TraitName - Lv X"
+    return {name: f"Lv {level}" for name, level in choice_counts.items()}
+
+
+
+def duplicate_choice(save_file_object: HadesSaveFile, trait_name: str) -> None:
+    loot_choices = save_file_object.loot_choice
+    for upgrade_key, upgrade in loot_choices.items():
+        choices = upgrade.get("UpgradeChoices", {})
+        for choice in choices.values():
+            if choice.get("Chosen", "true") == "true" and choice.get("Name") == trait_name:
+                # Duplicate the upgrade into a new entry
+                new_upgrade = copy.deepcopy(upgrade)
+                max_key = max(float(k) for k in loot_choices.keys()) + 1.0
+                loot_choices[str(max_key)] = new_upgrade
+                return  # Only duplicate once
+
+
+def add_choice(save_file_object: HadesSaveFile, trait_name: str) -> None:
+    loot_choices = save_file_object.loot_choice
+    if not loot_choices:
+        return
+
+    upgrade_keys = list(loot_choices.keys())
+    random_upgrade_key = random.choice(upgrade_keys)
+    upgrade = loot_choices[random_upgrade_key]
+    choices = upgrade.get("UpgradeChoices", {})
+
+    # Pick a random key from choices to replace
+    choice_keys = list(choices.keys())
+    if not choice_keys:
+        return
+
+    replace_key = random.choice(choice_keys)
+
+    # Unchoose all current choices in this upgrade
+    for choice in choices.values():
+        choice["Chosen"] = "false"
+
+    # Replace the selected choice with new trait
+    choices[replace_key] = {
+        "Rarity": "Common",  # Default rarity
+        "Chosen": "true",
+        "Name": trait_name
+    }    
+
+def remove_choice(save_file_object: HadesSaveFile, trait_name: str) -> None:
+    loot_choices = save_file_object.loot_choice
+    # Filter out entries where the trait was chosen
+    filtered_upgrades = []
+
+    for key in sorted(loot_choices.keys(), key=float):
+        upgrade = loot_choices[key]
+        choices = upgrade.get("UpgradeChoices", {})
+
+        # Check if this upgrade has the trait chosen
+        remove = False
+        for choice in choices.values():
+            if choice.get("Chosen", "false") == "true" and choice.get("Name") == trait_name:
+                remove = True
+                break
+
+        if not remove:
+            filtered_upgrades.append(upgrade)
+
+    # Rebuild the loot_choice with updated contiguous keys
+    new_loot_choices = {}
+    for index, upgrade in enumerate(filtered_upgrades):
+        new_key = f"{float(index):.1f}"
+        new_loot_choices[new_key] = upgrade
+
+    save_file_object.loot_choice = new_loot_choices
+
+    
+    
+    
+def update_lua(save_file_object: HadesSaveFile):
+    embed()
 
 def update_field(save_file_object: HadesSaveFile, field_name: str, field_value: any):
     """Updates a specific field in the save file object's lua_state."""
@@ -89,6 +182,43 @@ def update_field(save_file_object: HadesSaveFile, field_name: str, field_value: 
         is_hell_mode = str(field_value).lower() in ['true', 'on', '1', 'yes']
         ls.hell_mode = is_hell_mode
         save_file_object.hell_mode_enabled = is_hell_mode # Also update this top-level flag
+    elif field_name == "boons":
+        print("Entering Boon Modification Mode...")
+        while True:
+            print("\nChoose an option:")
+            print("  1. View current chosen boons")
+            print("  2. Remove a boon")
+            print("  3. Duplicate a boon")
+            print("  4. Add a new boon")
+            print("  5. Exit")
+            choice = input("Enter your choice [1-5]: ").strip()
+
+            if choice == "1":
+                boons = get_loot_choices(save_file_object)
+                print("Chosen Boons:")
+                for boon, level in boons.items():
+                    print(f"  {boon}: {level}")
+
+            elif choice == "2":
+                boon_name = input("Enter the exact name of the boon to remove: ").strip()
+                remove_choice(save_file_object, boon_name)
+                print(f"Removed all instances of '{boon_name}' that were chosen.")
+
+            elif choice == "3":
+                boon_name = input("Enter the exact name of the boon to duplicate: ").strip()
+                duplicate_choice(save_file_object, boon_name)
+                print(f"Duplicated one instance of '{boon_name}'.")
+
+            elif choice == "4":
+                boon_name = input("Enter the exact name of the new boon to add and mark as chosen: ").strip()
+                add_choice(save_file_object, boon_name)
+                print(f"Added '{boon_name}' as a new chosen boon.")
+
+            elif choice == "5":
+                print("Exiting Boon Modification Mode.")
+                break
+            else:
+                print("Invalid input. Please enter a number between 1 and 5.")
     else:
         raise ValueError(f"Unknown field: {field_name}")
 

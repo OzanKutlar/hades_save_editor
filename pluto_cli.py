@@ -12,6 +12,7 @@ from lua_editor import LuaStateEditor # Added import
 from core_logic import (
     load_save_file,
     save_game_file,
+    update_lua,
     get_save_info,
     get_currencies,
     update_field,
@@ -233,7 +234,8 @@ def handle_edit_raw(args):
         try:
             output_path = args.output if args.output else save_file_path
             print(f"Attempting to save all changes to: '{output_path}'...")
-            raw_save_file.to_file(output_path) # Use RawSaveFile.to_file
+            save_game_file(raw_save_file, output_path)
+            # raw_save_file.to_file(output_path) # Use RawSaveFile.to_file
             print(f"Successfully saved changes to '{output_path}'.")
             if output_path != save_file_path:
                 print(f"Original file '{save_file_path}' remains unchanged.")
@@ -258,50 +260,21 @@ def handle_edit_raw(args):
 
 def handle_edit_lua(args):
     try:
-        print(f"Loading save file: '{args.file}'...")
-        # Note: load_save_file from core_logic returns a HadesSaveFile instance
-        hades_save = load_save_file(args.file) 
-        print("Save file loaded.")
-
-        if not hades_save.lua_state:
-            print("Error: Lua state is not present in the save file.", file=sys.stderr)
-            return
-
-        # LuaState.to_dicts() returns a list of tables (usually one for Hades).
-        lua_state_dicts_list = hades_save.lua_state.to_dicts()
-        if not lua_state_dicts_list: # Check if the list is empty
-            print("Error: Lua state is empty or malformed (to_dicts() returned empty list).", file=sys.stderr)
-            return
+        save_file = load_save_file(args.file)
+        update_lua(save_file)
         
-        # The main Lua state is the first dictionary in the list
-        editable_lua_dict = lua_state_dicts_list[0] 
-
-        print("Launching Lua state editor...")
-        editor = LuaStateEditor(editable_lua_dict)
-        modified_lua_dict_result = editor.run() # This blocks until editor exits
-
-        if editor.user_saved and modified_lua_dict_result is not None:
-            print("Applying changes to Lua state...")
-            # LuaState.from_dict expects a list of dicts, so wrap modified_lua_dict_result
-            new_lua_state = LuaState.from_dict(hades_save.version, [modified_lua_dict_result])
-            
-            hades_save.lua_state = new_lua_state
-            
-            output_path = args.output if args.output else args.file
-            
-            print(f"Saving changes to '{output_path}'...")
-            save_game_file(hades_save, output_path) # from core_logic
-            print("Successfully saved changes.")
-        else:
-            print("Lua state editing cancelled. No changes were saved.")
+        output_path = args.output if args.output else args.file
+        save_game_file(save_file, output_path)
+        print(f"Successfully updated '{args.field}' to '{args.value}'. Saved to {output_path}")
 
     except FileNotFoundError:
-        print(f"Error: Save file not found at '{args.file}'.", file=sys.stderr)
+        print(f"Error: Save file not found at {args.file}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as ve:
+        print(f"Error updating field: {ve}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"An unexpected error occurred during 'edit_lua': {e}", file=sys.stderr)
-        # import traceback # Uncomment for debugging if needed
-        # traceback.print_exc() # Uncomment for debugging if needed
+        print(f"An error occurred: {e}", file=sys.stderr)
         sys.exit(1)
 
 def handle_show(args):
@@ -325,6 +298,15 @@ def handle_show(args):
             print("Currencies:")
             for currency, value in currencies.items():
                 print(f"  {currency.replace('_', ' ').title()}: {int(value)}")
+        elif args.section == "boons":
+            loot_choices = get_loot_choices(save_file)
+            print("Chosen Boons:")
+            if not loot_choices:
+                print("  No boons were chosen.")
+            else:
+                for boon, level in loot_choices.items():
+                    print(f"  {boon}: {level}")        
+        
     except FileNotFoundError:
         print(f"Error: Save file not found at {args.file}", file=sys.stderr)
         sys.exit(1)
@@ -409,7 +391,7 @@ def main():
     show_parser = subparsers.add_parser("show", help="Display save file data")
     show_parser.add_argument(
         "section",
-        choices=["info", "currencies"],
+        choices=["info", "currencies", "boons"],
         help=("Which section of data to display:\n"
               "  info       - File version, run count, current location, etc.\n"
               "  currencies - Darkness, Gems, Diamonds, etc.")
@@ -423,7 +405,7 @@ def main():
         choices=[
             "darkness", "gems", "diamonds", "nectar",
             "ambrosia", "keys", "titan_blood",
-            "god_mode_reduction", "hell_mode", "money"
+            "god_mode_reduction", "hell_mode", "money", "boons"
         ],
         help=("Field to modify (e.g., darkness, gems, god_mode_reduction, hell_mode).\n"
               "For god_mode_reduction, provide percentage (20-80).\n"

@@ -46,7 +46,7 @@ class LuaStateEditor:
             Window(height=1, content=self.path_text),
             Window(content=self.main_content_text),
             ConditionalContainer(
-                Window(height=1, content=self.edit_input_area),
+                content=self.edit_input_area,
                 filter=Condition(lambda: self.editing_mode)
             ),
             ConditionalContainer(
@@ -54,6 +54,7 @@ class LuaStateEditor:
                 filter=Condition(lambda: bool(self.error_message)) 
             )
         ])
+
         
         self.layout = Layout(container=root_container)
         self.app = Application(layout=self.layout, key_bindings=self.kb, full_screen=True, mouse_support=False)
