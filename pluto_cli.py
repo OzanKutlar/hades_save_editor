@@ -1,7 +1,13 @@
 import argparse
 import sys
 import os # For checking file existence in export_runs
+import tempfile
+import click # Added for click.edit()
+import subprocess
 import json
+
+from models.save_file import HadesSaveFile
+from models.lua_state import LuaState, lua_state_to_json_string, json_string_to_lua_state_data
 from core_logic import (
     load_save_file,
     save_game_file,
@@ -12,6 +18,178 @@ from core_logic import (
     export_runs_to_csv,
     _damage_reduction_from_easy_mode_level # For displaying god mode reduction
 )
+
+def handle_edit_raw(args):
+    # Give the user a moment to read the warning or a chance to Ctrl+C
+    try:
+        input("Press Enter to continue, or Ctrl+C to abort...")
+    except KeyboardInterrupt:
+        print("\nOperation aborted by user.")
+        return
+
+    save_file_path = args.file
+    temp_file_name = None  # Ensure temp_file_name is defined for the finally block
+
+    try:
+        try:
+            print(f"Loading save file: '{save_file_path}'...")
+            save_file = HadesSaveFile.from_file(save_file_path)
+            print("Save file loaded successfully.")
+        except FileNotFoundError:
+            print(f"Error: Save file not found at '{save_file_path}'. Please verify the path and try again.", file=sys.stderr)
+            return 
+        except IOError as e:
+            print(f"Error: Could not read the save file at '{save_file_path}'. An IO error occurred: {e}", file=sys.stderr)
+            return 
+        except Exception as e: 
+            print(f"Error: An unexpected error occurred while loading the save file '{save_file_path}': {e}", file=sys.stderr)
+            return 
+
+        try:
+            print("Converting Lua state to JSON format...")
+            json_string = lua_state_to_json_string(save_file.lua_state)
+            print("Lua state successfully converted to JSON.")
+        except Exception as e: 
+            print(f"Error: Failed to convert Lua state to JSON. Details: {e}", file=sys.stderr)
+            return
+
+
+        try:
+            # Create the temporary file
+            with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as tmp_file:
+                temp_file_name = tmp_file.name
+                tmp_file.write(json_string)
+            print(f"JSON data has been written to a temporary file: {temp_file_name}")
+        except (IOError, OSError) as e:
+            print(f"Error: Could not create or write to the temporary file. Details: {e}", file=sys.stderr)
+            if temp_file_name and os.path.exists(temp_file_name): 
+                 os.remove(temp_file_name)
+            return 
+
+        editor = os.environ.get('EDITOR')
+        editor_cmd_list = [] # Renamed for clarity
+        editor_opened_successfully = False
+        if not editor:
+            if sys.platform == "win32":
+                # Try to use Notepad++ instead of Notepad
+                notepad_plus_plus_path = r"C:\Program Files\Notepad++\notepad++.exe"
+                if os.path.exists(notepad_plus_plus_path):
+                    editor_cmd_list = [notepad_plus_plus_path, '-multiInst', '-nosession']
+                else:
+                    editor_cmd_list = ['notepad']  # Fallback
+            elif sys.platform == "darwin":
+                editor_cmd_list = ['open', '-W']  # -W waits for app to close
+            else: # Linux and other Unix-like
+                # Try common terminal editors if EDITOR is not set
+                # Check for availability in a real scenario might be needed
+                # For now, stick to xdg-open as a general fallback
+                editor_cmd_list = ['xdg-open']
+        else:
+            editor_cmd_list = editor.split() # Allow for editor commands with arguments
+        
+        editor_cmd_list.append(temp_file_name)
+
+        try:
+            print(f"Attempting to open the temporary file with your editor: {' '.join(editor_cmd_list)}")
+            print("Waiting for you to close the editor...")
+            
+            # For xdg-open, it often returns immediately. This is a known limitation.
+            # Other editors like nano, vim, gedit, when called directly, will block.
+            # Notepad on Windows when called directly also blocks.
+            # 'open -W' on macOS blocks.
+            if editor_cmd_list[0] == 'xdg-open':
+                # For xdg-open, we can't reliably wait. Inform the user.
+                print("INFO: 'xdg-open' may return immediately. Please ensure you save and close the file in your editor before proceeding.")
+                subprocess.run(editor_cmd_list) # Not using check=True as xdg-open exit status is not always reliable
+                input("Press Enter here after you have saved and closed the editor...")
+            elif editor_cmd_list[0] == 'notepad' and sys.platform == 'win32' and len(editor_cmd_list) == 2 : # just 'notepad <file>'
+                # `subprocess.run(['notepad', temp_file_name], check=True)` blocks.
+                # The previous `cmd /C start /WAIT notepad` is also fine. Sticking to direct call for simplicity.
+                subprocess.run(editor_cmd_list, check=True)
+            else: # General case for $EDITOR, 'open -W', or direct terminal editors
+                subprocess.run(editor_cmd_list, check=True)
+            editor_opened_successfully = True
+        except FileNotFoundError:
+            print(f"Error: Editor command '{editor_cmd_list[0]}' not found. Please ensure your EDITOR environment variable is set correctly, or that the default editor is available in your PATH.", file=sys.stderr)
+            return 
+        except subprocess.CalledProcessError as e:
+            print(f"Error: Your editor exited with an error (code: {e.returncode}). Please check any messages from the editor.", file=sys.stderr)
+            # Proceeding, as user might have saved, or the error might be non-critical for the file itself.
+            editor_opened_successfully = True # It opened, even if it error'd on close
+        except Exception as e: 
+            print(f"An unexpected error occurred while trying to open or run the editor: {e}", file=sys.stderr)
+            return # If editor failed to even attempt opening, abort.
+        
+        if not editor_opened_successfully and not (editor_cmd_list[0] == 'xdg-open'): # xdg-open case handled by input()
+             # If editor failed to open and it wasn't xdg-open (which we can't reliably track),
+             # then don't proceed.
+            print("Aborting due to editor failing to start properly.", file=sys.stderr)
+            return
+
+
+        try:
+            print(f"Reading modified JSON data from temporary file: {temp_file_name}...")
+            with open(temp_file_name, 'r') as tmp_file:
+                modified_json_string = tmp_file.read()
+            
+            if not modified_json_string.strip() and temp_file_name : # Check if file is empty or just whitespace
+                print("Warning: The temporary file appears to be empty or contains only whitespace. If you proceed, this might clear parts of your save data or cause errors.", file=sys.stderr)
+                user_confirmation = input("Do you want to proceed with the empty data? (yes/no): ").strip().lower()
+                if user_confirmation != 'yes':
+                    print("Operation aborted by user. No changes will be applied.")
+                    return
+        except (IOError, OSError) as e:
+            print(f"Error: Could not read from the temporary file '{temp_file_name}'. Details: {e}", file=sys.stderr)
+            return
+
+        try:
+            print("Validating and converting JSON data back to Lua state structure...")
+            new_lua_data = json_string_to_lua_state_data(modified_json_string)
+            print("JSON data successfully parsed.")
+        except json.JSONDecodeError as e:
+            print(f"Error: The modified data is not valid JSON. Please correct the syntax. Details: {e}", file=sys.stderr)
+            print(f"Your modified (invalid) JSON data was left in the temporary file: {temp_file_name}", file=sys.stderr)
+            print("Tip: You can try opening this file in a text editor that highlights JSON errors to find the issue.", file=sys.stderr)
+            # Intentionally do not remove the temp_file_name here so the user can recover their work.
+            # The finally block needs to be aware of this decision if we want to persist it.
+            # For now, the finally block will still remove it. This needs refinement if data persistence is key.
+            # A flag could be set: e.g., `keep_temp_file_on_error = True`
+            return 
+            
+        try:
+            print("Updating internal Lua state with the modified data...")
+            save_file.lua_state = LuaState.from_dict(save_file.version, new_lua_data)
+            print("Internal Lua state updated.")
+        except (TypeError, KeyError, IndexError, ValueError) as e: 
+            print(f"Error: The JSON data is valid, but its structure or types are not compatible with the expected Lua state format. Details: {e}", file=sys.stderr)
+            print(f"Your modified JSON data was left in the temporary file: {temp_file_name}", file=sys.stderr)
+            return
+        except Exception as e: 
+            print(f"Error: An unexpected error occurred while applying the JSON data to the Lua state. Details: {e}", file=sys.stderr)
+            return
+
+        try:
+            print(f"Attempting to save all changes back to the original save file: '{save_file_path}'...")
+            save_file.to_file(save_file_path)
+            print(f"Successfully saved changes to '{save_file_path}'. Your original file has been overwritten.")
+        except (IOError, OSError) as e:
+            print(f"Error: Could not write changes back to the save file '{save_file_path}'. Your original file was NOT modified. Details: {e}", file=sys.stderr)
+            return
+        except Exception as e:
+            print(f"Error: An unexpected error occurred while saving the final changes to '{save_file_path}'. Your original file was NOT modified. Details: {e}", file=sys.stderr)
+            return
+
+    except Exception as e: 
+        print(f"An critical unexpected error occurred during the 'edit_raw' process: {e}", file=sys.stderr)
+        print("Please report this error if it seems like a bug in the tool.", file=sys.stderr)
+    finally:
+        # Consider a flag here if we decide to keep temp_file_name on json.JSONDecodeError
+        if temp_file_name and os.path.exists(temp_file_name):
+            try:
+                os.remove(temp_file_name)
+                print(f"Temporary file '{temp_file_name}' has been removed.")
+            except OSError as e:
+                print(f"Error: Could not remove the temporary file '{temp_file_name}'. You may need to remove it manually. Details: {e}", file=sys.stderr)
 
 def handle_show(args):
     try:
@@ -34,41 +212,6 @@ def handle_show(args):
             print("Currencies:")
             for currency, value in currencies.items():
                 print(f"  {currency.replace('_', ' ').title()}: {int(value)}")
-                
-        elif args.section == "get_raw":
-            print("Extracting raw save file contents...")
-
-            raw = getattr(save_file, "raw_save_file", None)
-            if raw is not None:
-                try:
-                    # Extract instance attributes
-                    raw_dict = vars(raw)
-                except TypeError:
-                    # Fallback if vars() fails
-                    raw_dict = {
-                        attr: getattr(raw, attr)
-                        for attr in dir(raw)
-                        if not attr.startswith('_') and not callable(getattr(raw, attr))
-                    }
-
-                # Attempt to convert all values to serializable types
-                serializable_raw = {}
-                for key, value in raw_dict.items():
-                    try:
-                        json.dumps(value)  # Test if it's serializable
-                        serializable_raw[key] = value
-                    except TypeError:
-                        serializable_raw[key] = str(value)  # Fallback to string
-
-                # Write to file
-                output_path = os.path.join(os.getcwd(), "raw_save_file_output.json")
-                with open(output_path, "w", encoding="utf-8") as f:
-                    json.dump(serializable_raw, f, indent=2, ensure_ascii=False)
-
-                print(f"Raw data saved to: {output_path}")
-            else:
-                print("  No raw data available.")
-
     except FileNotFoundError:
         print(f"Error: Save file not found at {args.file}", file=sys.stderr)
         sys.exit(1)
@@ -153,14 +296,12 @@ def main():
     show_parser = subparsers.add_parser("show", help="Display save file data")
     show_parser.add_argument(
         "section",
-        choices=["info", "currencies", "get_raw"],
+        choices=["info", "currencies"],
         help=("Which section of data to display:\n"
               "  info       - File version, run count, current location, etc.\n"
-              "  currencies - Darkness, Gems, Diamonds, etc.\n"
-              "  get_raw    - Raw unparsed save file data (for debugging)")
+              "  currencies - Darkness, Gems, Diamonds, etc.")
     )
     show_parser.set_defaults(func=handle_show)
-
 
     # Update command
     update_parser = subparsers.add_parser("update", help="Modify a field in the save file and save changes")
@@ -195,22 +336,19 @@ def main():
     export_parser.add_argument("csv_filepath", help="Path to save the CSV file (e.g., runs.csv)")
     export_parser.set_defaults(func=handle_export_runs)
 
+    # Edit raw Lua state command
+    edit_raw_parser = subparsers.add_parser("edit_raw", help="Edit the raw Lua state via a temporary JSON file")
+    edit_raw_parser.add_argument(
+        "-o", "--output",
+        help="Optional: Path to save to a new file (otherwise overwrites original)"
+    )
+    edit_raw_parser.set_defaults(func=handle_edit_raw)
+
     if len(sys.argv) <= 1: # Should be 1 if only script name, or 2 if only --file without command
         parser.print_help(sys.stderr)
         sys.exit(1)
     
-    # Check if --file is provided before parsing to give a more specific error
-    # Note: argparse 'required=True' handles this, but this is an example if needed for complex cases
-    # if '--file' not in sys.argv and '-f' not in sys.argv:
-    #    print("Error: --file argument is required.", file=sys.stderr)
-    #    parser.print_help(sys.stderr)
-    #    sys.exit(1)
-        
     args = parser.parse_args()
-    
-    # Ensure that if a command is 'update', 'field' and 'value' are present.
-    # Argparse handles this due to them not being optional.
-    
     args.func(args)
 
 if __name__ == "__main__":

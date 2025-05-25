@@ -1,4 +1,5 @@
 import copy
+import json
 from io import BytesIO
 from typing import Dict, Any, List
 
@@ -140,3 +141,23 @@ class LuaState:
         return [
             copy.deepcopy(self._active_state)
         ]
+
+
+def lua_state_to_json_string(lua_state: LuaState) -> str:
+    """
+    Serializes a LuaState object to a JSON string.
+
+    :param lua_state: The LuaState object to serialize.
+    :return: A JSON string representation of the LuaState object.
+    """
+    return json.dumps(lua_state.to_dicts(), indent=2)
+
+
+def json_string_to_lua_state_data(json_string: str) -> List[Dict[Any, Any]]:
+    """
+    Deserializes a JSON string to LuaState data.
+
+    :param json_string: The JSON string to deserialize.
+    :return: The deserialized LuaState data.
+    """
+    return json.loads(json_string)
