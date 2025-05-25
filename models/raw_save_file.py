@@ -6,17 +6,25 @@ from schemas.sav_14 import sav14_schema, sav14_save_data_schema
 from schemas.sav_15 import sav15_schema, sav15_save_data_schema
 from schemas.sav_16 import sav16_schema, sav16_save_data_schema
 from schemas.version_id import version_identifier_schema
+from construct import Container # Moved import to top
 
 
 class RawSaveFile:
     def __init__(
             self,
             version: int,
-            save_data: Dict[Any, Any],
+            save_data: Any, # Changed type hint to Any to allow Dict or Container
     ):
         self.version = version
-        self.save_data = save_data
-        self.lua_state_bytes = save_data['lua_state']
+        self.save_data = save_data # This save_data is passed to construct.build later
+        
+        # Access lua_state based on type of save_data
+        if isinstance(save_data, Container):
+            self.lua_state_bytes = save_data.lua_state
+        elif isinstance(save_data, dict):
+            self.lua_state_bytes = save_data['lua_state']
+        else:
+            raise TypeError(f"save_data must be a Container or dict, got {type(save_data)}")
 
     @classmethod
     def from_file(cls, path: str) -> 'RawSaveFile':
@@ -33,36 +41,11 @@ class RawSaveFile:
             else:
                 raise Exception(f"Unsupported version {version}")
 
-            # Explicitly construct save_data dict to avoid internal construct fields like '_io'
-            parsed_data_container = parsed_schema.save_data.value
-            clean_save_data = {}
-            
-            # Common fields for v14, v15, v16 (adjust if there are version-specific top-level save_data fields)
-            # Based on sav16_save_data_schema, which is the most comprehensive here.
-            # Other schemas might have fewer fields, so getattr with default or checking version is safer if they differ significantly.
-            
-            expected_fields = [
-                "version", "location", "runs", "active_meta_points",
-                "active_shrine_points", "god_mode_enabled", "hell_mode_enabled",
-                "lua_keys", "current_map_name", "start_next_map", "lua_state"
-            ]
-            if version == 16: # version 16 has timestamp
-                expected_fields.insert(1, "timestamp")
-            # v14 and v15 do not have 'timestamp' at this level in their specific save_data_schema
-
-            for field_name in expected_fields:
-                if hasattr(parsed_data_container, field_name):
-                    clean_save_data[field_name] = getattr(parsed_data_container, field_name)
-                else:
-                    # This might happen if a field is truly optional or not in an older version's schema
-                    # For now, we assume fields are present if listed.
-                    # A more robust handling might involve schema introspection or default values.
-                    print(f"Warning: Field '{field_name}' not found in parsed save data for version {version}.", file=sys.stderr)
-
-
+            # The 'clean_save_data' logic is removed.
+            # RawSaveFile is instantiated with the direct parsed_schema.save_data.value (Container)
             return RawSaveFile(
                 version,
-                clean_save_data
+                parsed_schema.save_data.value 
             )
 
     def to_file(self, path: str) -> None:
@@ -95,7 +78,7 @@ class RawSaveFile:
                 filename=path,
             )
         elif self.version == 16:
-            sav15_schema.build_file(
+            sav16_schema.build_file( # Corrected from sav15_schema to sav16_schema
                 {
                     'save_data': {
                         'data': sav16_save_data_schema.build(

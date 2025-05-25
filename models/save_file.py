@@ -50,24 +50,28 @@ class HadesSaveFile:
 
         return HadesSaveFile(
             version=raw_save_file.version,
-            location=raw_save_file.save_data['location'],
-            runs=raw_save_file.save_data['runs'],
-            active_meta_points=raw_save_file.save_data['active_meta_points'],
-            active_shrine_points=raw_save_file.save_data['active_shrine_points'],
-            god_mode_enabled=raw_save_file.save_data['god_mode_enabled'],
-            hell_mode_enabled=raw_save_file.save_data['hell_mode_enabled'],
-            lua_keys=raw_save_file.save_data['lua_keys'],
-            current_map_name=raw_save_file.save_data['current_map_name'],
-            start_next_map=raw_save_file.save_data['start_next_map'],
+            location=raw_save_file.save_data.location,
+            runs=raw_save_file.save_data.runs,
+            active_meta_points=raw_save_file.save_data.active_meta_points,
+            active_shrine_points=raw_save_file.save_data.active_shrine_points,
+            god_mode_enabled=raw_save_file.save_data.god_mode_enabled,
+            hell_mode_enabled=raw_save_file.save_data.hell_mode_enabled,
+            lua_keys=raw_save_file.save_data.lua_keys,
+            current_map_name=raw_save_file.save_data.current_map_name,
+            start_next_map=raw_save_file.save_data.start_next_map,
             lua_state=lua_state,
             raw_save_file=raw_save_file
         )
 
     def to_file(self, path):
+        # This method constructs a new dictionary for RawSaveFile.
+        # This is compatible with RawSaveFile.to_file, which expects a dictionary
+        # that it will then pass to construct's .build() method.
+        # No changes needed here as it's creating a dict, not a Container.
         if self.version == 14:
             RawSaveFile(
                 version=14,
-                save_data={
+                save_data={ # This is a Python dict, not a Container
                     'version': self.version,
                     'location': self.location,
                     'runs': self.runs,
@@ -78,13 +82,13 @@ class HadesSaveFile:
                     'lua_keys': self.lua_keys,
                     'current_map_name': self.current_map_name,
                     'start_next_map': self.start_next_map,
-                    'lua_state': self.lua_state.to_bytes(),
+                    'lua_state': self.lua_state.to_bytes(), # This results in bytes
                 }
             ).to_file(path)
         elif self.version == 15:
             RawSaveFile(
                 version=15,
-                save_data={
+                save_data={ # This is a Python dict
                     'version': self.version,
                     'location': self.location,
                     'runs': self.runs,
@@ -95,13 +99,13 @@ class HadesSaveFile:
                     'lua_keys': self.lua_keys,
                     'current_map_name': self.current_map_name,
                     'start_next_map': self.start_next_map,
-                    'lua_state': self.lua_state.to_bytes(),
+                    'lua_state': self.lua_state.to_bytes(), # This results in bytes
                 }
             ).to_file(path)
         elif self.version == 16:
             RawSaveFile(
                 version=16,
-                save_data={
+                save_data={ # This is a Python dict
                     'version': self.version,
                     'timestamp': self.timestamp,
                     'location': self.location,
@@ -113,7 +117,7 @@ class HadesSaveFile:
                     'lua_keys': self.lua_keys,
                     'current_map_name': self.current_map_name,
                     'start_next_map': self.start_next_map,
-                    'lua_state': self.lua_state.to_bytes(),
+                    'lua_state': self.lua_state.to_bytes(), # This results in bytes
                 }
             ).to_file(path)
         else:
