@@ -15,6 +15,7 @@ from core_logic import (
     update_lua,
     get_save_info,
     get_currencies,
+    get_boons,
     update_field,
     reset_npc_gifts,
     export_runs_to_csv,
@@ -166,7 +167,6 @@ def handle_edit_raw(args):
             print("Aborting due to editor failing to start properly.", file=sys.stderr)
             return
 
-
         try:
             print(f"Reading modified JSON data from temporary file: {temp_file_name}...")
             with open(temp_file_name, 'r') as tmp_file:
@@ -181,7 +181,7 @@ def handle_edit_raw(args):
         except (IOError, OSError) as e:
             print(f"Error: Could not read from the temporary file '{temp_file_name}'. Details: {e}", file=sys.stderr)
             return
-
+        exit()
         try:
             print("Parsing modified JSON data...")
             modified_data_dict = json.loads(modified_json_string)
@@ -299,7 +299,7 @@ def handle_show(args):
             for currency, value in currencies.items():
                 print(f"  {currency.replace('_', ' ').title()}: {int(value)}")
         elif args.section == "boons":
-            loot_choices = get_loot_choices(save_file)
+            loot_choices = get_boons(save_file)
             print("Chosen Boons:")
             if not loot_choices:
                 print("  No boons were chosen.")
