@@ -1,7 +1,10 @@
 import csv
 from models.save_file import HadesSaveFile
 import gamedata # Used by export_runs_to_csv and potentially others
-from IPython import embed
+import copy
+from pathlib import Path
+from typing import Dict
+import json
 
 # Helper functions (moved from main.py)
 def _easy_mode_level_from_damage_reduction(damage_reduction: int) -> int:
@@ -59,92 +62,111 @@ def get_currencies(save_file_object: HadesSaveFile) -> dict:
         "money": ls.money,
         "titan_blood": ls.titan_blood,
     }
-    
 
-def get_loot_choices(save_file_object: HadesSaveFile) -> dict:
+
+BOON_LIST_FILE = Path("boon_list.json")    
+
+def load_boon_list() -> Dict:
+    if BOON_LIST_FILE.exists():
+        with open(BOON_LIST_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_boon_list(boon_list: Dict):
+    with open(BOON_LIST_FILE, "w") as f:
+        json.dump(boon_list, f, indent=4)
+
+def deep_copy_dict(obj):
+    # Recursive deep copy without using copy.deepcopy
+    if isinstance(obj, dict):
+        return {k: deep_copy_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [deep_copy_dict(item) for item in obj]
+    else:
+        return obj
+
+def get_boons(save_file_object) -> Dict[str, str]:
     print("Core logic: Getting Boons")
-    loot_choices = save_file_object.loot_choice
-    choice_counts = {}
+    boons = save_file_object.lua_state.boons  # dict of boon_name -> { "1.0": {...} }
+    boon_list = load_boon_list()
+    result = {}
 
-    for key, upgrade in loot_choices.items():
-        for _, choice in upgrade.get("UpgradeChoices", {}).items():
-            if choice.get("Chosen", "false") == "true":
-                name = choice.get("Name")
-                if name:
-                    choice_counts[name] = choice_counts.get(name, 0) + 1
+    for boon_name, boon_data in boons.items():
+        # print("Checking boon : " + boon_name);
+        data = boon_data.get(1, {})
 
-    # Format result like: "TraitName - Lv X"
-    return {name: f"Lv {level}" for name, level in choice_counts.items()}
+        level = data.get("OldLevel")
+        result[boon_name] = f"Lv {int(level)}" if level is not None else "Lv Max"
 
+        if boon_name not in boon_list:
+            boon_list[boon_name] = deep_copy_dict(boon_data)
+            print(f"New boon discovered and added to boon_list: {boon_name}")
 
-
-def duplicate_choice(save_file_object: HadesSaveFile, trait_name: str) -> None:
-    loot_choices = save_file_object.loot_choice
-    for upgrade_key, upgrade in loot_choices.items():
-        choices = upgrade.get("UpgradeChoices", {})
-        for choice in choices.values():
-            if choice.get("Chosen", "true") == "true" and choice.get("Name") == trait_name:
-                # Duplicate the upgrade into a new entry
-                new_upgrade = copy.deepcopy(upgrade)
-                max_key = max(float(k) for k in loot_choices.keys()) + 1.0
-                loot_choices[str(max_key)] = new_upgrade
-                return  # Only duplicate once
+    save_boon_list(boon_list)
+    return result
 
 
-def add_choice(save_file_object: HadesSaveFile, trait_name: str) -> None:
-    loot_choices = save_file_object.loot_choice
-    if not loot_choices:
+
+def update_boon_level(save_file_object, boon_name: str, level: int) -> None:
+    print(f"Updating boon '{boon_name}' to level {level}")
+    boons = save_file_object.lua_state.boons
+
+    if boon_name not in boons:
+        # If the boon doesn't exist yet, initialize its structure
+        boons[boon_name] = {1: {"OldLevel": level}}
+        print(f"Added new boon '{boon_name}' with level {level}")
+    else:
+        # Update existing boon's level
+        boons[boon_name].setdefault(1, {})["OldLevel"] = level
+        print(f"Set level {level} for existing boon '{boon_name}'")
+
+def remove_boon(save_file_object, boon_name: str) -> None:
+    print(f"Removing boon '{boon_name}'")
+    boons = save_file_object.lua_state.boons
+
+    if boon_name in boons:
+        del boons[boon_name]
+        print(f"Boon '{boon_name}' removed successfully")
+    else:
+        print(f"Boon '{boon_name}' not found; nothing to remove")
+
+def add_boon(save_file_object):
+    boon_list = load_boon_list()
+    if not boon_list:
+        print("No boons in boon_list to add.")
         return
 
-    upgrade_keys = list(loot_choices.keys())
-    random_upgrade_key = random.choice(upgrade_keys)
-    upgrade = loot_choices[random_upgrade_key]
-    choices = upgrade.get("UpgradeChoices", {})
+    print("Available boons:")
+    boon_names = list(boon_list.keys())
+    for i, name in enumerate(boon_names, 1):
+        print(f"{i}. {name}")
 
-    # Pick a random key from choices to replace
-    choice_keys = list(choices.keys())
-    if not choice_keys:
-        return
+    try:
+        choice = int(input("Enter the number of the boon to add: ")) - 1
+        if 0 <= choice < len(boon_names):
+            boon_name = boon_names[choice]
+            base_data = deep_copy_dict(boon_list[boon_name])
 
-    replace_key = random.choice(choice_keys)
+            # The base_data is expected to be in the form {1: { ... }}
+            if 1 not in base_data:
+                base_data[1] = {}
 
-    # Unchoose all current choices in this upgrade
-    for choice in choices.values():
-        choice["Chosen"] = "false"
+            level = base_data[1].get("OldLevel", "Max")
+            change = input(f"Current level is {level}. Change it? (y/n): ").lower()
+            if change == "y":
+                new_level = input("Enter new level (leave blank for Max): ")
+                if new_level.strip() == "":
+                    base_data[1].pop("OldLevel", None)  # Max level
+                else:
+                    base_data[1]["OldLevel"] = int(new_level)
 
-    # Replace the selected choice with new trait
-    choices[replace_key] = {
-        "Rarity": "Common",  # Default rarity
-        "Chosen": "true",
-        "Name": trait_name
-    }    
-
-def remove_choice(save_file_object: HadesSaveFile, trait_name: str) -> None:
-    loot_choices = save_file_object.loot_choice
-    # Filter out entries where the trait was chosen
-    filtered_upgrades = []
-
-    for key in sorted(loot_choices.keys(), key=float):
-        upgrade = loot_choices[key]
-        choices = upgrade.get("UpgradeChoices", {})
-
-        # Check if this upgrade has the trait chosen
-        remove = False
-        for choice in choices.values():
-            if choice.get("Chosen", "false") == "true" and choice.get("Name") == trait_name:
-                remove = True
-                break
-
-        if not remove:
-            filtered_upgrades.append(upgrade)
-
-    # Rebuild the loot_choice with updated contiguous keys
-    new_loot_choices = {}
-    for index, upgrade in enumerate(filtered_upgrades):
-        new_key = f"{float(index):.1f}"
-        new_loot_choices[new_key] = upgrade
-
-    save_file_object.loot_choice = new_loot_choices
+            # Add or replace the boon in the save file
+            save_file_object.lua_state.boons[boon_name] = base_data
+            print(f"Boon '{boon_name}' added to save file.")
+        else:
+            print("Invalid selection.")
+    except ValueError:
+        print("Please enter a valid number.")
 
     
     
@@ -183,42 +205,56 @@ def update_field(save_file_object: HadesSaveFile, field_name: str, field_value: 
         ls.hell_mode = is_hell_mode
         save_file_object.hell_mode_enabled = is_hell_mode # Also update this top-level flag
     elif field_name == "boons":
-        print("Entering Boon Modification Mode...")
         while True:
-            print("\nChoose an option:")
-            print("  1. View current chosen boons")
-            print("  2. Remove a boon")
-            print("  3. Duplicate a boon")
-            print("  4. Add a new boon")
-            print("  5. Exit")
-            choice = input("Enter your choice [1-5]: ").strip()
+            print("\n--- Boon Management ---")
+            print("1. List current boons")
+            print("2. Add a boon")
+            print("3. Remove a boon")
+            print("4. Update boon level")
+            print("5. Exit boon manager")
+            choice = input("Choose an option (1-5): ").strip()
 
             if choice == "1":
-                boons = get_loot_choices(save_file_object)
-                print("Chosen Boons:")
-                for boon, level in boons.items():
-                    print(f"  {boon}: {level}")
+                current_boons = ls.boons
+                if not current_boons:
+                    print("No boons currently in save file.")
+                else:
+                    for name, data in current_boons.items():
+                        level = data.get(1, {}).get("OldLevel")
+                        level_display = f"Lv {int(level)}" if level is not None else "Lv Max"
+                        print(f"- {name}: {level_display}")
 
             elif choice == "2":
-                boon_name = input("Enter the exact name of the boon to remove: ").strip()
-                remove_choice(save_file_object, boon_name)
-                print(f"Removed all instances of '{boon_name}' that were chosen.")
+                add_boon(save_file_object)
 
             elif choice == "3":
-                boon_name = input("Enter the exact name of the boon to duplicate: ").strip()
-                duplicate_choice(save_file_object, boon_name)
-                print(f"Duplicated one instance of '{boon_name}'.")
+                name = input("Enter the name of the boon to remove: ").strip()
+                remove_boon(save_file_object, name)
 
             elif choice == "4":
-                boon_name = input("Enter the exact name of the new boon to add and mark as chosen: ").strip()
-                add_choice(save_file_object, boon_name)
-                print(f"Added '{boon_name}' as a new chosen boon.")
+                name = input("Enter the name of the boon to update: ").strip()
+                if name not in ls.boons:
+                    print(f"Boon '{name}' not found.")
+                    continue
+                new_level = input("Enter new level (leave blank for Max): ").strip()
+                if new_level == "":
+                    ls.boons[name][1].pop("OldLevel", None)
+                    print(f"Set '{name}' to Lv Max.")
+                else:
+                    try:
+                        level_int = int(new_level)
+                        update_boon_level(save_file_object, name, level_int)
+                        print(f"Updated '{name}' to level {level_int}.")
+                    except ValueError:
+                        print("Invalid level. Must be an integer.")
 
             elif choice == "5":
-                print("Exiting Boon Modification Mode.")
+                print("Exiting boon manager.")
                 break
             else:
-                print("Invalid input. Please enter a number between 1 and 5.")
+                print("Invalid choice. Please enter a number from 1 to 5.")
+
+        
     else:
         raise ValueError(f"Unknown field: {field_name}")
 
