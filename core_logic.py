@@ -198,7 +198,7 @@ def update_field(save_file_object: HadesSaveFile, field_name: str, field_value: 
         ls.chthonic_key = float(field_value)
     elif field_name == "titan_blood":
         ls.titan_blood = float(field_value)
-    elif field_name == "reroll":
+    elif field_name == "rerolls":
         ls.rerolls = float(field_value)
     elif field_name == "god_mode_reduction":
         # Convert percentage to easy_mode_level
