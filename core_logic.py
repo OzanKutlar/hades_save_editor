@@ -60,6 +60,7 @@ def get_currencies(save_file_object: HadesSaveFile) -> dict:
         "ambrosia": ls.ambrosia,
         "chthonic_key": ls.chthonic_key,
         "money": ls.money,
+        "rerolls": ls.rerolls,
         "titan_blood": ls.titan_blood,
     }
 
@@ -197,6 +198,8 @@ def update_field(save_file_object: HadesSaveFile, field_name: str, field_value: 
         ls.chthonic_key = float(field_value)
     elif field_name == "titan_blood":
         ls.titan_blood = float(field_value)
+    elif field_name == "reroll":
+        ls.rerolls = float(field_value)
     elif field_name == "god_mode_reduction":
         # Convert percentage to easy_mode_level
         ls.easy_mode_level = _easy_mode_level_from_damage_reduction(float(field_value))

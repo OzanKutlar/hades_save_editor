@@ -405,7 +405,7 @@ def main():
         choices=[
             "darkness", "gems", "diamonds", "nectar",
             "ambrosia", "keys", "titan_blood",
-            "god_mode_reduction", "hell_mode", "money", "boons"
+            "god_mode_reduction", "hell_mode", "money", "boons", "rerolls"
         ],
         help=("Field to modify (e.g., darkness, gems, god_mode_reduction, hell_mode).\n"
               "For god_mode_reduction, provide percentage (20-80).\n"
